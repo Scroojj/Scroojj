@@ -13,7 +13,7 @@ description: Установка и подключение FreeLLMAPI — self-ho
 
 ## Что это и чего ожидать (скажи пользователю честно)
 
-- Локальный сервер (порт 3001), который принимает запросы в форматах OpenAI
+- Локальный сервер (Docker/исходники — порт 3001, десктоп-приложение — 31415), который принимает запросы в форматах OpenAI
   (`/v1/...`), Anthropic Messages (`/v1/messages`) и Gemini (`/v1beta`) и
   раскидывает их по бесплатным тарифам провайдеров, чьи ключи ты добавил.
   При 429/5xx переключается на следующую модель в цепочке. — `README.md`, разделы
@@ -58,6 +58,17 @@ docker compose up -d
 
 **C. Десктоп-приложение** (macOS `.dmg` / Windows `.exe`):
 https://github.com/tashfeenahmed/freellmapi/releases/latest
+(если список файлов на странице не грузится — он доступен по
+`https://github.com/tashfeenahmed/freellmapi/releases/expanded_assets/<тег>`).
+
+**Порт у десктоп-приложения другой: по умолчанию 31415**, а фактический порт
+записывается в `config.json` (`desktop/src/main.ts`, `DEFAULT_PORT`/`saveConfig`):
+Windows `%APPDATA%\FreeLLMAPI\config.json`, macOS
+`~/Library/Application Support/FreeLLMAPI/config.json`, Linux
+`~/.config/FreeLLMAPI/config.json`. Дашборд — трей → **Open Dashboard**, ключ —
+трей → **Copy Key**. Закрытие окна не останавливает шлюз (он живёт в трее);
+**Start at login** в меню трея включает автозапуск; `.env` у десктопа нет.
+Ниже в примерах `3001` — для Docker; для десктопа подставляй свой порт.
 
 Проверка, что сервер жив:
 ```bash
@@ -87,7 +98,9 @@ export FREELLMAPI_API_KEY='freellmapi-...'
 ## Шаг 3. Подключить агента
 
 Все команды — из npm-пакета `freellmapi` (`cli/README.md`), нужен Node.js ≥ 20.18.
-Общие флаги: `--url` (по умолчанию `http://localhost:3001`), `--api-key`,
+Общие флаги: `--url` (**в коде CLI по умолчанию `http://localhost:3000`** —
+`cli/src/index.ts`, `parseArgs`; README пишет 3001, поэтому всегда передавай
+`--url` или `FREELLMAPI_URL` явно), `--api-key`,
 `--profile NAME`, `--model ID`, `--dry-run`. Вместо флагов работают
 `FREELLMAPI_URL` и `FREELLMAPI_API_KEY`.
 
@@ -101,6 +114,17 @@ npx freellmapi launch
 ```
 Обычный `claude` при этом продолжает работать на подписке — удобно переключаться,
 когда платный лимит кончился.
+
+**Windows:** `launch` запускает `claude` через `spawn` без shell
+(`cli/src/index.ts`, `runChild`), поэтому npm-обёртку `claude.cmd` он может не
+найти. Для Windows в навыке есть готовый скрипт `scripts/claude-free.cmd`
+(+ `claude-free.ps1`): двойной клик находит порт десктоп-приложения, берёт и
+проверяет ключ из буфера обмена (трей → Copy Key), сохраняет его в
+переменную пользователя `FREELLMAPI_API_KEY`, включает
+`FREELLMAPI_CONTEXT_HANDOFF`, при необходимости ставит Claude Code через npm и
+запускает `claude` с `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` только для этого
+окна. Модели задавать не нужно: шлюз по умолчанию отображает все `claude-*` на
+`auto` (`server/src/routes/anthropic.ts`, `services/anthropic-map.ts`).
 
 **Постоянная настройка — `setup-claude`.** Внимание: без `--profile` он
 записывает в `~/.claude/settings.json` блок `env` с `ANTHROPIC_BASE_URL`,
