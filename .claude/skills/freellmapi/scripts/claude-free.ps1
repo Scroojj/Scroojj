@@ -1,15 +1,20 @@
 ﻿# Запуск Claude Code через локальный шлюз FreeLLMAPI (бесплатные модели).
-# Windows, PowerShell 5.1+. Запускается через claude-free.cmd двойным кликом.
+# Windows, PowerShell 5.1+. Запускается через claude-free.cmd или ярлык
+# «Claude FREE» на Рабочем столе, который скрипт создаёт при первом запуске.
 #
 # Что делает:
-#   1. находит запущенное десктоп-приложение FreeLLMAPI (порт из
-#      %APPDATA%\FreeLLMAPI\config.json, затем 31415 и 3001);
+#   1. находит десктоп-приложение FreeLLMAPI (порт из
+#      %APPDATA%\FreeLLMAPI\config.json, затем 31415 и 3001) и запускает его,
+#      если оно выключено;
 #   2. берёт unified-ключ из переменной пользователя FREELLMAPI_API_KEY или из
-#      буфера обмена (трей → Copy Key) и сохраняет его в эту переменную;
+#      буфера обмена (трей → Copy Key), проверяет и сохраняет его;
 #   3. один раз включает FREELLMAPI_CONTEXT_HANDOFF=on_model_switch;
 #   4. при необходимости ставит Claude Code через npm;
-#   5. запускает claude с ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN только для
-#      этого окна — обычный `claude` остаётся на подписке.
+#   5. спрашивает папку проекта (запоминает последнюю) и режим: новая сессия
+#      или продолжение старой;
+#   6. запускает claude в режиме manual (спрашивает разрешение на действия) с
+#      ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN только для этого окна — обычный
+#      `claude` остаётся на подписке.
 
 $ErrorActionPreference = 'Stop'
 
@@ -21,31 +26,59 @@ function Fail($text) {
     Read-Host 'Нажмите Enter, чтобы закрыть'
     exit 1
 }
+function Get-UserVar($name) { [Environment]::GetEnvironmentVariable($name, 'User') }
+function Set-UserVar($name, $value) { [Environment]::SetEnvironmentVariable($name, $value, 'User') }
 
 # --- 1. Шлюз -----------------------------------------------------------------
-$ports = @()
-$configPath = Join-Path $env:APPDATA 'FreeLLMAPI\config.json'
-if (Test-Path $configPath) {
-    try {
-        $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
-        if ($cfg.port) { $ports += [int]$cfg.port }
-    } catch { }
+function Get-GatewayPorts {
+    $ports = @()
+    $configPath = Join-Path $env:APPDATA 'FreeLLMAPI\config.json'
+    if (Test-Path $configPath) {
+        try {
+            $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+            if ($cfg.port) { $ports += [int]$cfg.port }
+        } catch { }
+    }
+    $ports += 31415, 3001
+    return $ports | Select-Object -Unique
 }
-$ports += 31415, 3001
-$ports = $ports | Select-Object -Unique
 
-$base = $null
-foreach ($p in $ports) {
-    try {
-        $r = Invoke-WebRequest -Uri "http://127.0.0.1:$p/livez" -UseBasicParsing -TimeoutSec 3
-        if ($r.StatusCode -eq 200) { $base = "http://127.0.0.1:$p"; break }
-    } catch { }
+function Find-Gateway {
+    foreach ($p in (Get-GatewayPorts)) {
+        try {
+            $r = Invoke-WebRequest -Uri "http://127.0.0.1:$p/livez" -UseBasicParsing -TimeoutSec 3
+            if ($r.StatusCode -eq 200) { return "http://127.0.0.1:$p" }
+        } catch { }
+    }
+    return $null
 }
+
+function Find-DesktopApp {
+    $candidates = @()
+    if ($env:LOCALAPPDATA) { $candidates += [IO.Path]::Combine($env:LOCALAPPDATA, 'Programs', 'FreeLLMAPI', 'FreeLLMAPI.exe') }
+    if ($env:ProgramFiles) { $candidates += [IO.Path]::Combine($env:ProgramFiles, 'FreeLLMAPI', 'FreeLLMAPI.exe') }
+    foreach ($c in $candidates) { if (Test-Path -LiteralPath $c) { return $c } }
+    return $null
+}
+
+$base = Find-Gateway
 if (-not $base) {
-    Fail ("Шлюз FreeLLMAPI не отвечает (проверены порты: $($ports -join ', ')).`n" +
-          "Запустите приложение FreeLLMAPI (значок у часов) и запустите этот файл снова.")
+    $app = Find-DesktopApp
+    if (-not $app) {
+        Fail ("FreeLLMAPI не запущен, и приложение не найдено в обычных местах установки.`n" +
+              "Запустите FreeLLMAPI вручную (значок у часов) и откройте этот ярлык снова.")
+    }
+    Say 'Запускаю FreeLLMAPI...' 'Cyan'
+    Start-Process -FilePath $app
+    for ($i = 0; $i -lt 30 -and -not $base; $i++) {
+        Start-Sleep -Seconds 2
+        $base = Find-Gateway
+    }
+    if (-not $base) {
+        Fail 'FreeLLMAPI запустился, но не отвечает уже минуту. Пришлите скриншот этого окна.'
+    }
 }
-Say "Шлюз найден: $base" 'Green'
+Say "Шлюз FreeLLMAPI работает: $base" 'Green'
 
 # --- 2. Ключ -----------------------------------------------------------------
 function Test-Key($key) {
@@ -56,7 +89,7 @@ function Test-Key($key) {
     } catch { return $false }
 }
 
-$key = [Environment]::GetEnvironmentVariable('FREELLMAPI_API_KEY', 'User')
+$key = Get-UserVar 'FREELLMAPI_API_KEY'
 if ($key -and -not (Test-Key $key)) {
     Say 'Сохранённый ключ не подошёл, нужен новый.' 'Yellow'
     $key = $null
@@ -76,16 +109,16 @@ while (-not $key) {
         continue
     }
     $key = $clip
-    [Environment]::SetEnvironmentVariable('FREELLMAPI_API_KEY', $key, 'User')
+    Set-UserVar 'FREELLMAPI_API_KEY' $key
     Say 'Ключ проверен и сохранён.' 'Green'
 }
 
 # --- 3. Передача контекста при смене модели ----------------------------------
-if ([Environment]::GetEnvironmentVariable('FREELLMAPI_CONTEXT_HANDOFF', 'User') -ne 'on_model_switch') {
-    [Environment]::SetEnvironmentVariable('FREELLMAPI_CONTEXT_HANDOFF', 'on_model_switch', 'User')
+if ((Get-UserVar 'FREELLMAPI_CONTEXT_HANDOFF') -ne 'on_model_switch') {
+    Set-UserVar 'FREELLMAPI_CONTEXT_HANDOFF' 'on_model_switch'
     Say ''
     Say 'Включена передача контекста при смене модели.' 'Green'
-    Say 'Чтобы она заработала, один раз перезапустите FreeLLMAPI: значок у часов -> "Quit FreeLLMAPI", затем откройте приложение снова.' 'Yellow'
+    Say 'Она заработает после перезапуска FreeLLMAPI: значок у часов -> "Quit FreeLLMAPI", затем снова этот ярлык.' 'Yellow'
 }
 
 # --- 4. Claude Code ----------------------------------------------------------
@@ -104,13 +137,70 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
     }
 }
 
-# --- 5. Запуск ---------------------------------------------------------------
+# --- 5. Ярлык на Рабочем столе (один раз) ------------------------------------
+function Install-DesktopShortcut {
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    if (-not $desktop) { return }
+    $lnkPath = Join-Path $desktop 'Claude FREE.lnk'
+    if (Test-Path $lnkPath) { return }
+    $cmdPath = Join-Path $PSScriptRoot 'claude-free.cmd'
+    if (-not (Test-Path $cmdPath)) { return }
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $lnk = $shell.CreateShortcut($lnkPath)
+        $lnk.TargetPath = $cmdPath
+        $lnk.WorkingDirectory = $PSScriptRoot
+        $lnk.Description = 'Claude Code на бесплатных моделях (FreeLLMAPI)'
+        $app = Find-DesktopApp
+        if ($app) { $lnk.IconLocation = "$app,0" }
+        $lnk.Save()
+        Say 'На Рабочем столе создан ярлык "Claude FREE" — дальше запускайте через него.' 'Green'
+    } catch { }
+}
+Install-DesktopShortcut
+
+# --- 6. Папка проекта и режим ------------------------------------------------
+function Select-ProjectFolder($initial) {
+    Add-Type -AssemblyName System.Windows.Forms
+    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dlg.Description = 'Выберите папку проекта, в которой будет работать Claude'
+    $dlg.ShowNewFolderButton = $true
+    if ($initial -and (Test-Path $initial)) { $dlg.SelectedPath = $initial }
+    $owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true }
+    try {
+        if ($dlg.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { return $dlg.SelectedPath }
+        return $null
+    } finally { $owner.Dispose() }
+}
+
+$last = Get-UserVar 'FREELLMAPI_CLAUDE_LAST_DIR'
+if (-not $last -or -not (Test-Path $last)) { $last = [Environment]::GetFolderPath('MyDocuments') }
+Say ''
+Say 'Выберите папку проекта в открывшемся окне (оно может быть позади этого).' 'Cyan'
+$folder = Select-ProjectFolder $last
+if (-not $folder) { Fail 'Папка не выбрана.' }
+Set-UserVar 'FREELLMAPI_CLAUDE_LAST_DIR' $folder
+Set-Location -LiteralPath $folder
+Say "Папка: $folder" 'Green'
+
+Say ''
+Say '  1 — новая сессия (просто Enter)' 'Gray'
+Say '  2 — продолжить последнюю сессию в этой папке' 'Gray'
+Say '  3 — выбрать старую сессию из списка' 'Gray'
+$choice = (Read-Host 'Ваш выбор').Trim()
+$claudeArgs = @('--permission-mode', 'manual')
+switch ($choice) {
+    '2' { $claudeArgs += '--continue' }
+    '3' { $claudeArgs += '--resume' }
+}
+
+# --- 7. Запуск ---------------------------------------------------------------
 Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
 $env:ANTHROPIC_BASE_URL = $base
 $env:ANTHROPIC_AUTH_TOKEN = $key
 
 Say ''
 Say 'Запускаю Claude Code на бесплатных моделях.' 'Green'
-Say 'Старую сессию можно продолжить командой /resume. Выход — /exit.' 'Gray'
+Say 'Перед каждым действием он спросит разрешение. Выход — /exit.' 'Gray'
 Say ''
-& claude @args
+& claude @claudeArgs @args

@@ -118,12 +118,15 @@ npx freellmapi launch
 **Windows:** `launch` запускает `claude` через `spawn` без shell
 (`cli/src/index.ts`, `runChild`), поэтому npm-обёртку `claude.cmd` он может не
 найти. Для Windows в навыке есть готовый скрипт `scripts/claude-free.cmd`
-(+ `claude-free.ps1`): двойной клик находит порт десктоп-приложения, берёт и
-проверяет ключ из буфера обмена (трей → Copy Key), сохраняет его в
-переменную пользователя `FREELLMAPI_API_KEY`, включает
-`FREELLMAPI_CONTEXT_HANDOFF`, при необходимости ставит Claude Code через npm и
-запускает `claude` с `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` только для этого
-окна. Модели задавать не нужно: шлюз по умолчанию отображает все `claude-*` на
+(+ `claude-free.ps1`, оба файла в одной папке). Двойной клик: находит порт
+десктоп-приложения и запускает его, если оно выключено; берёт и проверяет ключ
+из буфера обмена (трей → Copy Key) и сохраняет его в переменную пользователя
+`FREELLMAPI_API_KEY`; включает `FREELLMAPI_CONTEXT_HANDOFF`; при необходимости
+ставит Claude Code через npm; один раз создаёт ярлык «Claude FREE» на Рабочем
+столе; спрашивает папку проекта (запоминает последнюю) и режим — новая сессия,
+`--continue` или `--resume`; запускает `claude --permission-mode manual`
+(без auto mode — на бесплатных моделях действия должны подтверждаться) с
+`ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` только для этого окна. Модели задавать не нужно: шлюз по умолчанию отображает все `claude-*` на
 `auto` (`server/src/routes/anthropic.ts`, `services/anthropic-map.ts`).
 
 **Постоянная настройка — `setup-claude`.** Внимание: без `--profile` он
