@@ -203,4 +203,22 @@ Say ''
 Say 'Запускаю Claude Code на бесплатных моделях.' 'Green'
 Say 'Перед каждым действием он спросит разрешение. Выход — /exit.' 'Gray'
 Say ''
+$started = Get-Date
 & claude @claudeArgs @args
+$code = $LASTEXITCODE
+
+# --continue/--resume без прошлых сессий в этой папке сразу завершается с
+# ошибкой — в этом случае начинаем новую сессию.
+if ($code -ne 0 -and $choice -in @('2', '3') -and ((Get-Date) - $started).TotalSeconds -lt 15) {
+    Say ''
+    Say 'Похоже, в этой папке нет прошлых сессий. Начинаю новую.' 'Yellow'
+    Say ''
+    & claude --permission-mode manual @args
+    $code = $LASTEXITCODE
+}
+
+if ($code -ne 0) {
+    Say ''
+    Say "Claude Code завершился с ошибкой (код $code). Сфотографируйте это окно и пришлите скриншот." 'Red'
+    Read-Host 'Нажмите Enter, чтобы закрыть'
+}
