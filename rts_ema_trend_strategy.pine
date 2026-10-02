@@ -1,0 +1,86 @@
+//@version=5
+// Трендовая система по EMA 15/30 (по описанию из поста @martynovtim).
+// Исходные правила из поста:
+//   - 5-минутный график, EMA 15 (быстрая) и EMA 30 (медленная)
+//   - быстрая выше медленной -> только покупки, наоборот -> только продажи
+//   - стоп фиксированный (в посте 500 пунктов), тейк не регламентирован
+//   - усиление: тот же наклон средних на 1ч и на дневке; вход на откате к 30 EMA;
+//     стоп по ATR за последнюю неделю вместо фиксированного
+// Дополнение, которого в посте нет: фильтр "пилы" (regime filter), т.к. автор пишет,
+// что главное - определять тренд/не тренд, но формального правила не даёт.
+// Скрипт не проверен на исторических данных: результаты бэктеста нужно смотреть самому.
+strategy("RTS EMA 15/30 Trend", overlay = true, initial_capital = 1000000,
+  default_qty_type = strategy.fixed, default_qty_value = 1, pyramiding = 0,
+  process_orders_on_close = false)
+
+// ---------------- Inputs ----------------
+fastLen   = input.int(15, "Быстрая EMA", minval = 1, group = "Средние")
+slowLen   = input.int(30, "Медленная EMA", minval = 1, group = "Средние")
+
+useHtf    = input.bool(true, "Фильтр: 1ч совпадает по направлению", group = "Фильтры")
+useDaily  = input.bool(false, "Фильтр: дневка совпадает по направлению", group = "Фильтры")
+useRegime = input.bool(true, "Фильтр режима: разброс средних > k * ATR (моё дополнение)", group = "Фильтры")
+regimeK   = input.float(0.5, "k для фильтра режима", step = 0.1, group = "Фильтры")
+usePullbk = input.bool(true, "Вход только на откате к медленной EMA", group = "Фильтры")
+
+stopMode  = input.string("Фиксированный", "Тип стопа", options = ["Фиксированный", "ATR"], group = "Риск")
+stopFixed = input.float(500, "Фиксированный стоп (пункты цены)", minval = 0.0, group = "Риск")
+atrLen    = input.int(850, "ATR длина в барах (~неделя на 5м; подбирайте под сессию)", minval = 1, group = "Риск")
+atrMult   = input.float(1.0, "Множитель ATR для стопа", step = 0.1, group = "Риск")
+tpPoints  = input.float(0, "Тейк-профит (пункты, 0 = нет)", minval = 0.0, group = "Риск")
+exitOnRev = input.bool(true, "Выход при развороте средних", group = "Риск")
+
+// ---------------- Calculations ----------------
+fast = ta.ema(close, fastLen)
+slow = ta.ema(close, slowLen)
+atr  = ta.atr(atrLen)
+
+upTrend   = fast > slow
+downTrend = fast < slow
+
+// Старший ТФ: берём значение закрытой свечи ([1] + lookahead_on), без заглядывания в будущее
+htfUpPrev = request.security(syminfo.tickerid, "60", (ta.ema(close, fastLen) > ta.ema(close, slowLen))[1], lookahead = barmerge.lookahead_on)
+dayUpPrev = request.security(syminfo.tickerid, "D", (ta.ema(close, fastLen) > ta.ema(close, slowLen))[1], lookahead = barmerge.lookahead_on)
+
+htfOkLong   = not useHtf or htfUpPrev
+htfOkShort  = not useHtf or not htfUpPrev
+dayOkLong   = not useDaily or dayUpPrev
+dayOkShort  = not useDaily or not dayUpPrev
+
+regimeOk = not useRegime or math.abs(fast - slow) > regimeK * atr[0]
+
+// Откат: цена коснулась медленной EMA, но закрылась с правильной стороны
+pullbackLong  = low <= slow and close > slow
+pullbackShort = high >= slow and close < slow
+longPattern   = usePullbk ? pullbackLong : true
+shortPattern  = usePullbk ? pullbackShort : true
+
+longSignal  = upTrend and htfOkLong and dayOkLong and regimeOk and longPattern
+shortSignal = downTrend and htfOkShort and dayOkShort and regimeOk and shortPattern
+
+stopDist = stopMode == "ATR" ? atr * atrMult : stopFixed
+
+// ---------------- Orders ----------------
+if longSignal and strategy.position_size <= 0
+    strategy.entry("Long", strategy.long)
+if shortSignal and strategy.position_size >= 0
+    strategy.entry("Short", strategy.short)
+
+if strategy.position_size > 0
+    entryPx = strategy.position_avg_price
+    strategy.exit("Exit L", "Long", stop = entryPx - stopDist, limit = tpPoints > 0 ? entryPx + tpPoints : na)
+if strategy.position_size < 0
+    entryPx = strategy.position_avg_price
+    strategy.exit("Exit S", "Short", stop = entryPx + stopDist, limit = tpPoints > 0 ? entryPx - tpPoints : na)
+
+if exitOnRev
+    if strategy.position_size > 0 and ta.crossunder(fast, slow)
+        strategy.close("Long", comment = "Разворот")
+    if strategy.position_size < 0 and ta.crossover(fast, slow)
+        strategy.close("Short", comment = "Разворот")
+
+// ---------------- Plot ----------------
+plot(fast, "EMA fast", color = color.teal)
+plot(slow, "EMA slow", color = color.red)
+plotshape(longSignal, "Long signal", shape.triangleup, location.belowbar, color.green, size = size.tiny)
+plotshape(shortSignal, "Short signal", shape.triangledown, location.abovebar, color.red, size = size.tiny)
